@@ -31,23 +31,13 @@
 
 package com.facebook.stetho.server;
 
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.InterruptedIOException;
-import java.net.BindException;
-import java.net.SocketException;
-import java.util.concurrent.atomic.AtomicInteger;
-
 import android.annotation.SuppressLint;
 import android.net.LocalServerSocket;
 import android.net.LocalSocket;
 import android.util.Log;
-
 import com.facebook.stetho.common.LogUtil;
-import com.facebook.stetho.common.Utf8Charset;
+import com.facebook.stetho.common.ProcessUtil;
 import com.facebook.stetho.common.Util;
-
 import org.apache.http.ConnectionClosedException;
 import org.apache.http.HttpException;
 import org.apache.http.HttpServerConnection;
@@ -57,20 +47,19 @@ import org.apache.http.params.BasicHttpParams;
 import org.apache.http.params.CoreConnectionPNames;
 import org.apache.http.params.CoreProtocolPNames;
 import org.apache.http.params.HttpParams;
-import org.apache.http.protocol.BasicHttpContext;
-import org.apache.http.protocol.BasicHttpProcessor;
-import org.apache.http.protocol.HttpContext;
-import org.apache.http.protocol.HttpRequestHandlerRegistry;
-import org.apache.http.protocol.HttpService;
-import org.apache.http.protocol.ResponseConnControl;
-import org.apache.http.protocol.ResponseContent;
-import org.apache.http.protocol.ResponseDate;
-import org.apache.http.protocol.ResponseServer;
+import org.apache.http.protocol.*;
+
+import javax.annotation.Nonnull;
+import java.io.IOException;
+import java.io.InterruptedIOException;
+import java.net.BindException;
+import java.net.SocketException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class LocalSocketHttpServer {
 
   private static final String WORKDER_THREAD_NAME_PREFIX = "StethoWorker";
-  private static final int MAX_BIND_RETRIES = 3;
+  private static final int MAX_BIND_RETRIES = 2;
   private static final int TIME_BETWEEN_BIND_RETRIES_MS = 1000;
   private static final String SOCKET_NAME_PREFIX = "stetho_";
 
@@ -78,12 +67,6 @@ public class LocalSocketHttpServer {
    * Convince {@code chrome://inspect/devices} that we're "one of them" :)
    */
   private static final String SOCKET_NAME_SUFFIX = "_devtools_remote";
-
-  /**
-   * Maximum length allowed in {@code /proc/self/cmdline}.  Imposed to avoid a large buffer
-   * allocation during the init path.
-   */
-  private static final int CMDLINE_BUFFER_SIZE = 64;
 
   private static final AtomicInteger sThreadId = new AtomicInteger();
 
@@ -119,8 +102,7 @@ public class LocalSocketHttpServer {
    * If successful, this thread blocks forever or until {@link #stop} is called, whichever
    * happens first.
    *
-   * @throws IOException if address is not specified and we cannot read the process name from
-   *   /proc/self/cmdline.
+   * @throws IOException Thrown on failure to bind the socket.
    */
   public void run() throws IOException {
     synchronized (this) {
@@ -134,12 +116,9 @@ public class LocalSocketHttpServer {
     listenOnAddress(address);
   }
 
-  private void listenOnAddress(String address) {
-    bindToSocket(address);
-
-    if (mServerSocket == null) {
-      return;
-    }
+  private void listenOnAddress(String address) throws IOException {
+    mServerSocket = bindToSocket(address);
+    LogUtil.i("Listening on @" + address);
 
     HttpParams params = null;
     HttpService service = null;
@@ -178,44 +157,10 @@ public class LocalSocketHttpServer {
   }
 
   private static String getDefaultAddress() throws IOException {
-    return SOCKET_NAME_PREFIX + getProcessName() + SOCKET_NAME_SUFFIX;
-  }
-
-  private static String getProcessName() throws IOException {
-    byte[] cmdlineBuffer = new byte[CMDLINE_BUFFER_SIZE];
-
-    // Avoid using a Reader to not pick up a forced 16K buffer.  Silly java.io...
-    FileInputStream stream = new FileInputStream("/proc/self/cmdline");
-    boolean success = false;
-    try {
-      int n = stream.read(cmdlineBuffer);
-      success = true;
-      int endIndex = tidyProcessName(cmdlineBuffer, n);
-      return new String(cmdlineBuffer, 0, endIndex);
-    } finally {
-      Util.close(stream, !success);
-    }
-  }
-
-  private static int tidyProcessName(byte[] processName, int count) {
-    int i = 0;
-    OUTER:
-    for (; i < count; i++) {
-      switch (processName[i]) {
-        case '\\':
-        case '.':
-        case ':':
-          processName[i] = '_';
-          break;
-        case 0:
-        case ' ':
-        case '\r':
-        case '\n':
-        case '\t':
-          break OUTER;
-      }
-    }
-    return i;
+    return
+        SOCKET_NAME_PREFIX +
+        ProcessUtil.getProcessName() +
+        SOCKET_NAME_SUFFIX;
   }
 
   private HttpParams createParams() {
@@ -266,26 +211,26 @@ public class LocalSocketHttpServer {
     } catch (IOException e) {}
   }
 
-  private void bindToSocket(String address) {
-    try {
-      int retries = MAX_BIND_RETRIES;
-      while (retries > 0) {
-        retries--;
-        try {
-          if (LogUtil.isLoggable(Log.DEBUG)) {
-            LogUtil.d("Binding server to " + address);
-          }
-          mServerSocket = new LocalServerSocket(address);
-        } catch (BindException be) {
-          LogUtil.w(be, "Binding error, sleep 1 second ...");
-          if (retries == 0)
-            throw be;
-          Thread.sleep(TIME_BETWEEN_BIND_RETRIES_MS);
+  @Nonnull
+  private static LocalServerSocket bindToSocket(String address) throws IOException {
+    int retries = MAX_BIND_RETRIES;
+    IOException firstException = null;
+    do {
+      try {
+        if (LogUtil.isLoggable(Log.DEBUG)) {
+          LogUtil.d("Trying to bind to @" + address);
         }
+        return new LocalServerSocket(address);
+      } catch (BindException be) {
+        LogUtil.w(be, "Binding error, sleep " + TIME_BETWEEN_BIND_RETRIES_MS + " ms...");
+        if (firstException == null) {
+          firstException = be;
+        }
+        Util.sleepUninterruptibly(TIME_BETWEEN_BIND_RETRIES_MS);
       }
-    } catch (Exception e) {
-      LogUtil.e(e, "Could not bind to socket.");
-    }
+    } while (retries-- > 0);
+
+    throw firstException;
   }
 
   private static class WorkerThread extends Thread {

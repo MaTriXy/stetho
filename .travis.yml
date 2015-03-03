@@ -8,3 +8,5 @@ android:
 branches:
   except:
     - gh-pages
+
+sudo: false
