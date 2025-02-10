@@ -13,16 +13,42 @@
 ##
 ###############################################################################
 
+import os
 import socket
 import struct
 import re
 
-def stetho_open(device=None, process=None):
-  adb = _connect_to_device(device)
+def get_adb_server_port_from_server_socket():
+  socket_spec = os.environ.get('ADB_SERVER_SOCKET')
+  if not socket_spec:
+      return None
+  if not socket_spec.startswith('tcp:'):
+    raise HumanReadableError(
+      'Invalid or unsupported socket spec \'%s\' specified in ADB_SERVER_SOCKET.' % (
+        socket_spec))
+  return socket_spec.split(':')[-1]
+
+def get_adb_server_port():
+  defaultPort = 5037
+  portStr = get_adb_server_port_from_server_socket() or os.environ.get('ANDROID_ADB_SERVER_PORT')
+  if portStr is None:
+    return defaultPort
+  elif portStr.isdigit():
+    return int(portStr)
+  else:
+    raise HumanReadableError(
+      'Invalid integer \'%s\' specified in ANDROID_ADB_SERVER_PORT or ADB_SERVER_SOCKET.' % (
+        portStr))
+
+def stetho_open(device=None, process=None, port=None):
+  if port is None:
+    port = get_adb_server_port()
+
+  adb = _connect_to_device(device, port)
 
   socket_name = None
   if process is None:
-    socket_name = _find_only_stetho_socket(device)
+    socket_name = _find_only_stetho_socket(device, port)
   else:
     socket_name = _format_process_as_stetho_socket(process)
 
@@ -35,14 +61,25 @@ def stetho_open(device=None, process=None):
 
   return adb.sock
 
-def _find_only_stetho_socket(device):
-  adb = _connect_to_device(device)
+def read_input(sock, n, tag):
+  data = b'';
+  while len(data) < n:
+    incoming_data = sock.recv(n - len(data))
+    if len(incoming_data) == 0:
+      break
+    data += incoming_data
+  if len(data) != n:
+    raise IOError('Unexpected end of stream while reading %s.' % tag)
+  return data
+
+def _find_only_stetho_socket(device, port):
+  adb = _connect_to_device(device, port)
   try:
     adb.select_service('shell:cat /proc/net/unix')
     last_stetho_socket_name = None
     process_names = []
     for line in adb.sock.makefile():
-      row = line.rstrip().split(' ')
+      row = re.split(r'\s+', line.rstrip())
       if len(row) < 8:
         continue
       socket_name = row[7]
@@ -57,8 +94,9 @@ def _find_only_stetho_socket(device):
     if len(process_names) > 1:
       raise HumanReadableError(
           'Multiple stetho-enabled processes available:%s\n' % (
-              '\n\t'.join([''] + process_names)) +
-          'Use -p <process> to select one')
+              '\n\t'.join([''] + list(set(process_names)))) +
+          'Use -p <process> or the environment variable STETHO_PROCESS to ' +
+          'select one')
     elif last_stetho_socket_name == None:
       raise HumanReadableError('No stetho-enabled processes running')
     else:
@@ -66,9 +104,12 @@ def _find_only_stetho_socket(device):
   finally:
     adb.sock.close()
 
-def _connect_to_device(device=None):
+def _connect_to_device(device=None, port=None):
+  if port is None:
+    raise HumanReadableError('Must specify a port when calling _connect_to_device')
+
   adb = AdbSmartSocketClient()
-  adb.connect()
+  adb.connect(port)
 
   try:
     if device is None:
@@ -100,29 +141,26 @@ class AdbSmartSocketClient(object):
 
   def connect(self, port=5037):
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.connect(('127.0.0.1', port))
+    try:
+      sock.connect(('localhost', port))
+    except ConnectionRefusedError:
+      sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+      sock.connect(('localhost', port))
     self.sock = sock
 
   def select_service(self, service):
     message = '%04x%s' % (len(service), service)
     self.sock.send(message.encode('ascii'))
-    status = self._read_exactly(4)
+    status = read_input(self.sock, 4, "status")
     if status == b'OKAY':
       # All good...
       pass
     elif status == b'FAIL':
-      reason_len = int(self._read_exactly(4), 16)
-      reason = self._read_exactly(reason_len).decode('ascii')
+      reason_len = int(read_input(self.sock, 4, "fail reason"), 16)
+      reason = read_input(self.sock, reason_len, "fail reason lean").decode('ascii')
       raise SelectServiceError(reason)
     else:
       raise Exception('Unrecognized status=%s' % (status))
-
-  def _read_exactly(self, num_bytes):
-    buf = b''
-    while len(buf) < num_bytes:
-      new_buf = self.sock.recv(num_bytes)
-      buf += new_buf
-    return buf
 
 class SelectServiceError(Exception):
   def __init__(self, reason):

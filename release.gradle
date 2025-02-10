@@ -5,25 +5,81 @@ def isReleaseBuild() {
     return VERSION_NAME.contains("SNAPSHOT") == false
 }
 
-def getRepositoryUrl() {
+def getMavenRepositoryUrl() {
     return hasProperty('repositoryUrl') ? property('repositoryUrl') : "https://oss.sonatype.org/service/local/staging/deploy/maven2/"
 }
 
-def getRepositoryUsername() {
+def getMavenRepositoryUsername() {
     return hasProperty('repositoryUsername') ? property('repositoryUsername') : ""
 }
 
-def getRepositoryPassword() {
+def getMavenRepositoryPassword() {
     return hasProperty('repositoryPassword') ? property('repositoryPassword') : ""
+}
+
+def configureStethoPom(def pom) {
+    pom.whenConfigured {
+        applyOptionalDeps it, getOptionalDeps()
+    }
+    pom.project {
+        name POM_NAME
+        artifactId POM_ARTIFACT_ID
+        packaging POM_PACKAGING
+        description 'Stetho Debugging Platform for Android'
+        url 'https://github.com/facebook/stetho'
+
+        scm {
+            url 'https://github.com/facebook/stetho.git'
+            connection 'scm:git:https://github.com/facebook/stetho.git'
+            developerConnection 'scm:git:git@github.com:facebook/stetho.git'
+        }
+
+        licenses {
+            license {
+                name 'MIT License'
+                url 'https://github.com/facebook/stetho/blob/master/LICENSE'
+                distribution 'repo'
+            }
+        }
+
+        developers {
+            developer {
+                id 'facebook'
+                name 'Facebook'
+            }
+        }
+    }
+}
+
+// Hack to modify the resulting pom's dependencies to use
+// <optional>true</optional> where appropriate.
+def applyOptionalDeps(def pom, def optionalDeps) {
+    pom.dependencies.each { dep ->
+        def artifactLabel = dep.groupId + ':' + dep.artifactId
+        if (optionalDeps.contains(artifactLabel)) {
+            dep.optional = true
+        }
+    }
+}
+
+def getOptionalDeps() {
+    if (hasProperty('POM_OPTIONAL_DEPS')) {
+        return property('POM_OPTIONAL_DEPS').split(',') as Set
+    } else {
+        return []
+    }
 }
 
 afterEvaluate { project ->
     task androidJavadoc(type: Javadoc) {
         source = android.sourceSets.main.java.srcDirs
         classpath += files(android.bootClasspath)
+        if (JavaVersion.current().isJava8Compatible()) {
+            options.addStringOption('Xdoclint:none', '-quiet')
+        }
     }
 
-    task androidJavadocJar(type: Jar) {
+    task androidJavadocJar(type: Jar, dependsOn: androidJavadoc) {
         classifier = 'javadoc'
         from androidJavadoc.destinationDir
     }
@@ -43,7 +99,6 @@ afterEvaluate { project ->
     artifacts {
         archives androidJavadocJar
         archives androidSourcesJar
-        archives jarRelease
     }
 
     version = VERSION_NAME
@@ -61,41 +116,14 @@ afterEvaluate { project ->
                 MavenDeployment deployment -> signing.signPom(deployment)
             }
 
-            repository(url: getRepositoryUrl()) {
+            repository(url: getMavenRepositoryUrl()) {
                 authentication(
-                        userName: getRepositoryUsername(),
-                        password: getRepositoryPassword())
+                        userName: getMavenRepositoryUsername(),
+                        password: getMavenRepositoryPassword())
 
             }
 
-            pom.project {
-                name POM_NAME
-                artifactId POM_ARTIFACT_ID
-                packaging POM_PACKAGING
-                description 'Stetho Debugging Platform for Android'
-                url 'https://github.com/facebook/stetho'
-
-                scm {
-                    url 'https://github.com/facebook/stetho.git'
-                    connection 'scm:git:https://github.com/facebook/stetho.git'
-                    developerConnection 'scm:git:git@github.com:facebook/stetho.git'
-                }
-
-                licenses {
-                    license {
-                        name 'BSD License'
-                        url 'https://github.com/facebook/stetho/blob/master/LICENSE'
-                        distribution 'repo'
-                    }
-                }
-
-                developers {
-                    developer {
-                        id 'facebook'
-                        name 'Facebook'
-                    }
-                }
-            }
+            configureStethoPom pom
         }
     }
 
@@ -104,6 +132,7 @@ afterEvaluate { project ->
         repositories {
             mavenDeployer {
                 repository url: "file://${System.properties['user.home']}/.m2/repository"
+                configureStethoPom pom
             }
         }
     }

@@ -1,12 +1,21 @@
 language: android
 
+jdk:
+  - oraclejdk8
+
+before_install:
+  - yes | sdkmanager "platforms;android-27"
+
 android:
   components:
-    - build-tools 21.1.2
-    - android-21
+    - tools
+    - android-28
+    - platform-tools
 
 branches:
   except:
     - gh-pages
 
-sudo: false
+# Disable Travis container-based infrastructure to correct
+# resource consumption in gradle presumably due to dexing.
+sudo: true

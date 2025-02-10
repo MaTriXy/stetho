@@ -3,20 +3,21 @@
 import sys
 import os
 import io
-from http.client import *
-import urllib.parse
 
 from stetho_open import *
 
 def main():
   # Manually parse out -p <process>, all other option handling occurs inside
   # the hosting process.
-  process = None
+
+  # Connect to the process passed in via -p. If that is not supplied fallback
+  # the process defined in STETHO_PROCESS. If neither are defined throw.
+  process = os.environ.get('STETHO_PROCESS')
+
   args = sys.argv[1:]
   if len(args) > 0 and (args[0] == '-p' or args[0] == '--process'):
     if len(args) < 2:
-      print(sys.stderr, 'Missing <process>')
-      sys.exit(1)
+      sys.exit('Missing <process>')
     else:
       process = args[1]
       args = args[2:]
@@ -24,50 +25,54 @@ def main():
   # Connect to ANDROID_SERIAL if supplied, otherwise fallback to any
   # transport.
   device = os.environ.get('ANDROID_SERIAL')
+
+  # Connect on the overridden port if specified
+  port = get_adb_server_port()
+
   try:
-    conn = HTTPConnectionOverADB(device, process)
-    query_params = ['argv=' + urllib.parse.quote(arg) for arg in args]
-    url = '/dumpapp?%s' % ('&'.join(query_params))
-    fake_host = { 'Host': 'localhost:5037' }
+    sock = stetho_open(device, process, port)
 
-    http_method = None
-    body = None
-    if not sys.stdin.isatty():
-      http_method = 'POST'
-      body = sys.stdin.detach().read()
-    else:
-      http_method = 'GET'
-      body = None
+    # Send dumpapp hello (DUMP + version=1)
+    sock.send(b'DUMP' + struct.pack('!l', 1))
 
-    conn.request(http_method, url, body, fake_host)
+    enter_frame = b'!' + struct.pack('!l', len(args))
+    for arg in args:
+      argAsUTF8 = arg.encode('utf-8')
+      enter_frame += struct.pack(
+          '!H' + str(len(argAsUTF8)) + 's',
+          len(argAsUTF8),
+          argAsUTF8)
+    sock.send(enter_frame)
 
-    reply = conn.getresponse()
-
-    if reply.status != 200:
-      raise Exception('Unexpected HTTP reply from Stetho: %d' % (reply.status))
-
-    read_frames(reply)
+    read_frames(sock)
   except HumanReadableError as e:
-    print(e)
-    sys.exit(1)
+    sys.exit(e)
   except BrokenPipeError as e:
     sys.exit(0)
   except KeyboardInterrupt:
     sys.exit(1)
 
-def read_frames(conn):
+def read_frames(sock):
   while True:
     # All frames have a single character code followed by a big-endian int
-    code = read_input(conn, 1, 'code')
-    n = struct.unpack('!L', read_input(conn, 4, 'int4'))[0]
+    code = read_input(sock, 1, 'code')
+    n = struct.unpack('!l', read_input(sock, 4, 'int4'))[0]
 
     if code == b'1':
       if n > 0:
-        sys.stdout.buffer.write(read_input(conn, n, 'stdout blob'))
+        sys.stdout.buffer.write(read_input(sock, n, 'stdout blob'))
+        sys.stdout.buffer.flush()
     elif code == b'2':
       if n > 0:
-        sys.stderr.buffer.write(read_input(conn, n, 'stderr blob'))
+        sys.stderr.buffer.write(read_input(sock, n, 'stderr blob'))
         sys.stderr.buffer.flush()
+    elif code == b'_':
+      if n > 0:
+        data = sys.stdin.buffer.read(n)
+        if len(data) == 0:
+          sock.send(b'-' + struct.pack('!l', -1))
+        else:
+          sock.send(b'-' + struct.pack('!l', len(data)) + data)
     elif code == b'x':
       sys.exit(n)
     else:
@@ -75,20 +80,5 @@ def read_frames(conn):
         raise IOError('Unexpected header: %s' % code)
       break
 
-def read_input(conn, n, tag):
-  data = conn.read(n)
-  if not data or len(data) != n:
-    raise IOError('Unexpected end of stream while reading %s.' % tag)
-  return data
-
-class HTTPConnectionOverADB(HTTPConnection):
-  def __init__(self, device, process):
-    super(HTTPConnectionOverADB, self).__init__('localhost', 5037)
-    self._device = device
-    self._process = process
-
-  def connect(self):
-    self.sock = stetho_open(device=self._device, process=self._process)
- 
 if __name__ == '__main__':
   main()

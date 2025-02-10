@@ -1,4 +1,9 @@
-// Copyright 2004-present Facebook. All Rights Reserved.
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
 
 package com.facebook.stetho.inspector.protocol.module;
 
@@ -7,10 +12,12 @@ import java.util.List;
 
 import android.content.Context;
 
+import com.facebook.stetho.common.Util;
 import com.facebook.stetho.inspector.jsonrpc.JsonRpcException;
 import com.facebook.stetho.inspector.jsonrpc.JsonRpcPeer;
 import com.facebook.stetho.inspector.jsonrpc.JsonRpcResult;
 import com.facebook.stetho.inspector.jsonrpc.protocol.JsonRpcError;
+import com.facebook.stetho.inspector.network.AsyncPrettyPrinterInitializer;
 import com.facebook.stetho.inspector.network.NetworkPeerManager;
 import com.facebook.stetho.inspector.network.ResponseBodyData;
 import com.facebook.stetho.inspector.network.ResponseBodyFileManager;
@@ -64,12 +71,31 @@ public class Network implements ChromeDevtoolsDomain {
   }
 
   private GetResponseBodyResponse readResponseBody(String requestId)
-      throws IOException {
+      throws IOException, JsonRpcException {
     GetResponseBodyResponse response = new GetResponseBodyResponse();
-    ResponseBodyData bodyData = mResponseBodyFileManager.readFile(requestId);
+    ResponseBodyData bodyData;
+    try {
+      bodyData = mResponseBodyFileManager.readFile(requestId);
+    } catch (OutOfMemoryError e) {
+      throw new JsonRpcException(new JsonRpcError(JsonRpcError.ErrorCode.INTERNAL_ERROR,
+          e.toString(),
+          null /* data */));
+    }
     response.body = bodyData.data;
     response.base64Encoded = bodyData.base64Encoded;
     return response;
+  }
+
+  /**
+   * Method that allows callers to provide an {@link AsyncPrettyPrinterInitializer} that is
+   * responsible for registering all
+   * {@link com.facebook.stetho.inspector.network.AsyncPrettyPrinter}.
+   * Note that AsyncPrettyPrinterInitializer cannot be null and can only be set once.
+   * @param initializer
+   */
+  public void setPrettyPrinterInitializer(AsyncPrettyPrinterInitializer initializer) {
+    Util.throwIfNull(initializer);
+    mNetworkPeerManager.setPrettyPrinterInitializer(initializer);
   }
 
   private static class GetResponseBodyResponse implements JsonRpcResult {
@@ -282,5 +308,115 @@ public class Network implements ChromeDevtoolsDomain {
 
     @JsonProperty(required = true)
     public double receivedHeadersEnd;
+  }
+
+  public static class WebSocketCreatedParams {
+    @JsonProperty(required = true)
+    public String requestId;
+
+    @JsonProperty(required = true)
+    public String url;
+  }
+
+  public static class WebSocketClosedParams {
+    @JsonProperty(required = true)
+    public String requestId;
+
+    @JsonProperty(required = true)
+    public double timestamp;
+  }
+
+  public static class WebSocketWillSendHandshakeRequestParams {
+    @JsonProperty(required = true)
+    public String requestId;
+
+    @JsonProperty(required = true)
+    public double timestamp;
+
+    @JsonProperty(required = true)
+    public double wallTime;
+
+    @JsonProperty(required = true)
+    public WebSocketRequest request;
+  }
+
+  public static class WebSocketRequest {
+    @JsonProperty(required = true)
+    public JSONObject headers;
+  }
+
+  public static class WebSocketHandshakeResponseReceivedParams {
+    @JsonProperty(required = true)
+    public String requestId;
+
+    @JsonProperty(required = true)
+    public double timestamp;
+
+    @JsonProperty(required = true)
+    public WebSocketResponse response;
+  }
+
+  public static class WebSocketResponse {
+    @JsonProperty(required = true)
+    public int status;
+
+    @JsonProperty(required = true)
+    public String statusText;
+
+    @JsonProperty(required = true)
+    public JSONObject headers;
+
+    @JsonProperty
+    public String headersText;
+
+    @JsonProperty
+    public JSONObject requestHeaders;
+
+    @JsonProperty
+    public String requestHeadersText;
+  }
+
+  public static class WebSocketFrameReceivedParams {
+    @JsonProperty(required = true)
+    public String requestId;
+
+    @JsonProperty(required = true)
+    public double timestamp;
+
+    @JsonProperty(required = true)
+    public WebSocketFrame response;
+  }
+
+  public static class WebSocketFrameSentParams {
+    @JsonProperty(required = true)
+    public String requestId;
+
+    @JsonProperty(required = true)
+    public double timestamp;
+
+    @JsonProperty(required = true)
+    public WebSocketFrame response;
+  }
+
+  public static class WebSocketFrame {
+    @JsonProperty(required = true)
+    public int opcode;
+
+    @JsonProperty(required = true)
+    public boolean mask;
+
+    @JsonProperty(required = true)
+    public String payloadData;
+  }
+
+  public static class WebSocketFrameErrorParams {
+    @JsonProperty(required = true)
+    public String requestId;
+
+    @JsonProperty(required = true)
+    public double timestamp;
+
+    @JsonProperty(required = true)
+    public String errorMessage;
   }
 }

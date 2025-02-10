@@ -1,3 +1,10 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+
 package com.facebook.stetho.urlconnection;
 
 import android.util.Pair;
@@ -31,7 +38,7 @@ class URLConnectionInspectorHeaders implements NetworkEventReporter.InspectorHea
   public String firstHeaderValue(String name) {
     int N = headerCount();
     for (int i = 0; i < N; i++) {
-      if (name.equals(headerName(i))) {
+      if (name.equalsIgnoreCase(headerName(i))) {
         return headerValue(i);
       }
     }

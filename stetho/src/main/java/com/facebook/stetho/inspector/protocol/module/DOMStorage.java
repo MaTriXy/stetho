@@ -1,11 +1,15 @@
-// Copyright 2004-present Facebook. All Rights Reserved.
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
 
 package com.facebook.stetho.inspector.protocol.module;
 
-import android.annotation.TargetApi;
 import android.content.Context;
 import android.content.SharedPreferences;
-import android.os.Build;
+
 import com.facebook.stetho.inspector.console.CLog;
 import com.facebook.stetho.inspector.domstorage.DOMStoragePeerManager;
 import com.facebook.stetho.inspector.domstorage.SharedPreferencesHelper;
@@ -16,6 +20,7 @@ import com.facebook.stetho.inspector.protocol.ChromeDevtoolsDomain;
 import com.facebook.stetho.inspector.protocol.ChromeDevtoolsMethod;
 import com.facebook.stetho.json.ObjectMapper;
 import com.facebook.stetho.json.annotation.JsonProperty;
+
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -56,7 +61,7 @@ public class DOMStorage implements ChromeDevtoolsDomain {
     String prefTag = storage.securityOrigin;
     if (storage.isLocalStorage) {
       SharedPreferences prefs = mContext.getSharedPreferences(prefTag, Context.MODE_PRIVATE);
-      for (Map.Entry<String, ?> prefsEntry : prefs.getAll().entrySet()) {
+      for (Map.Entry<String, ?> prefsEntry : SharedPreferencesHelper.getSharedPreferenceEntriesSorted(prefs)) {
         ArrayList<String> entry = new ArrayList<String>(2);
         entry.add(prefsEntry.getKey());
         entry.add(SharedPreferencesHelper.valueToString(prefsEntry.getValue()));
@@ -155,15 +160,10 @@ public class DOMStorage implements ChromeDevtoolsDomain {
     } else if (value instanceof String) {
       editor.putString(key, (String)value);
     } else if (value instanceof Set) {
-      putStringSet(editor, key, (Set<String>)value);
+      editor.putStringSet(key, (Set<String>)value);
     } else {
       throw new IllegalArgumentException("Unsupported type=" + value.getClass().getName());
     }
-  }
-
-  @TargetApi(Build.VERSION_CODES.HONEYCOMB)
-  private static void putStringSet(SharedPreferences.Editor editor, String key, Set<String> value) {
-    editor.putStringSet(key, value);
   }
 
   public static class StorageId {

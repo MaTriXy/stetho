@@ -1,8 +1,17 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+
 package com.facebook.stetho.inspector.console;
 
 import com.facebook.stetho.common.LogRedirector;
 import com.facebook.stetho.inspector.helper.ChromePeerManager;
 import com.facebook.stetho.inspector.protocol.module.Console;
+
+import javax.annotation.Nonnull;
 
 /**
  * Utility for reporting an event to the console
@@ -25,5 +34,18 @@ public class CLog {
     Console.MessageAddedRequest messageAddedRequest = new Console.MessageAddedRequest();
     messageAddedRequest.message = message;
     chromePeerManager.sendNotificationToPeers("Console.messageAdded", messageAddedRequest);
+  }
+
+  public static void writeToConsole(
+      Console.MessageLevel logLevel,
+      Console.MessageSource messageSource,
+      String messageText
+  ) {
+    ConsolePeerManager peerManager = ConsolePeerManager.getInstanceOrNull();
+    if (peerManager == null) {
+      return;
+    }
+
+    writeToConsole(peerManager, logLevel, messageSource, messageText);
   }
 }
